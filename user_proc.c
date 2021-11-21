@@ -62,13 +62,13 @@ static int ossAttach(){
         }
 
 	semID = semget(key_sem, 0, 0);
-	if (semID < 0){
+	if(semID < 0){
 		fprintf(stderr,"%s: failed to get id for semaphore. ",prog);
                 perror("Error");
                 return -1;
 	}
 	ossptr = (struct oss *)shmat(shmID, NULL, 0);
-	if (ossptr == (void *)-1){
+	if(ossptr == (void *)-1){
                 fprintf(stderr,"%s: failed to get pointer for shared memory. ",prog);
                 perror("Error");
                 return -1;
@@ -77,11 +77,91 @@ static int ossAttach(){
 	return 0;
 
 }
+static int releaseRes(const struct descriptor proc[descriptorCount]){
+	int i, len = 0, list[descriptorCount];
 
+	for(i = 0; i < descriptorCount; i++){
+		//save the desc id if user currently hold it
+		if(proc[i].val > 0)
+			list[len++] = i;
+	}
 
+	//return a random resources id to be released
+	return (len == 0) ? -1 : list[rand() % len];
+}
+static int requestRes(const struct descriptor proc[descriptorCount]){
+	int i, len = 0, list[descriptorCount];
+
+	for(i = 0; i < descriptorCount; i++){
+		//save the desc id if user want to request this
+		if(proc[i].max > 0)
+			list[len++] = i;
+
+	} 
+	return (len == 0) ? -1 : list[rand() % len];
+}
+static int waitReq(struct descriptorRequest *req){
+	while((req->state == rWAIT) || (req->state == rBLOCK)){
+		//this function will wait until the request is executed
+		if(ossSemPost() < 0){
+			return -1;
+		}
+		
+		usleep(sleeptime);
+
+		if(ossSemWait() < 0){
+			return -1;
+		}
+
+	}
+	if(req->state == rDENY)
+		return -1; 
+	return 0;
+
+}
+static int userProcess(){
+	int descID;
+	static int max_prob = 100;
+
+	int action = ((rand() % max_prob) < B) ? 0 : 1;
+
+	switch(action){
+		case 0: 
+			//releasing
+			descID = releaseRes(user->desc);
+			if(descID == -1){
+				//Currently dont have any resources to release
+				//Ask for resources
+				action = 1;
+				descID = requestRes(user->desc);
+				if(descID == -1)
+					return -1;
+		 
+			}
+			break;
+		case 1:
+			//requesting
+			descID = requestRes(user->desc);
+			if(descID == -1){
+				//max_prob = B 
+				action = 0;
+				descID = releaseRes(user->desc);
+				if(descID == -1)
+					return -1;	
+			}	
+			break; 
+	}
+
+	user->request.id = descID;
+	user->request.val = (action == 0) ? -1 * user->desc[descID].val : user->desc[descID].max;
+	user->request.state = rWAIT;
+	
+	return waitReq(&user->request);
+
+}
 int main(const int argc, char *const argv[]){
 	prog = argv[0];
-	if (argc != 2){
+	if(argc != 2){
 		fprintf(stderr, "%s: Missing arguments\n",prog);
 		return EXIT_FAILURE;
 	}
@@ -98,12 +178,44 @@ int main(const int argc, char *const argv[]){
 	
 	struct timeval tstep, tcheck;
 	tstep.tv_sec = 0;
-	tstep.tv_usec = termCheckPeriod;
+	tstep.tv_usec = rand() % (termCheckPeriod + 1);
 
 			
 	ossSemWait();
 	timeradd(&tstep, &ossptr->time, &tcheck);
 	ossSemPost();
+
+	int stop = 0;
+	while(!stop){
+		if(ossSemWait() < 0){
+			break;
+		}
+		
+		if(timercmp(&ossptr->time, &tcheck, >)){
+			//if it is time to terminate
+			stop = ossptr->terminateFlag;
+			tstep.tv_usec = rand() % (termCheckPeriod + 1);
+			timeradd(&tstep, &ossptr->time, &tcheck);
+		}else{
+			stop = userProcess();
+		}
+		if(ossSemPost < 0){
+			break;
+		}
+	}
+
+	// now releasing all
+	ossSemWait();
+	user->request.id = -1;
+	user->request.val = 0;
+	user->request.state = rWAIT;
+	waitReq(&user->request);
+	ossSemPost();	
+
+	if(shmdt(ossptr) == -1){
+        	fprintf(stderr,"%s: failed to detach shared memory. ",prog);
+       	        perror("Error");
+        }
 
 	return EXIT_SUCCESS;
 }

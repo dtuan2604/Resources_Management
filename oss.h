@@ -1,6 +1,7 @@
 #include <sys/time.h>
 #include "config.h"
 
+#define sleeptime 250
 
 const key_t key_shm = 4506;
 const key_t key_sem = 6708;
