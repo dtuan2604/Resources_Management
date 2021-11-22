@@ -400,7 +400,7 @@ static int unblock(const int b, const enum requestState newSt){
 static void listAllocatedRes(){
 	int i, j;
 	printf("System available resources at time %li.%06ld\n", ossptr->time.tv_sec, ossptr->time.tv_usec);
-  	linesCount++;
+  	report.lineCount++;
 	printf("\t");
 	for(i = 0; i < descriptorCount; i++){
 		printf("R%d\t",i);
