@@ -397,6 +397,27 @@ static int unblock(const int b, const enum requestState newSt){
 	ossSemPost();
 	return 0;
 }
+static void listAllocatedRes(){
+	int i, j;
+	printf("System available resources at time %li.%06ld\n", ossptr->time.tv_sec, ossptr->time.tv_usec);
+  	linesCount++;
+	printf("\t");
+	for(i = 0; i < descriptorCount; i++){
+		printf("R%d\t",i);
+	}
+	printf("\n");
+	report.lineCount++;
+	for(i = 0; i < processSize; i++){
+		struct process *proc = &ossptr->procs[i];
+		printf("P%d\t",proc->id);
+		for(j = 0; j < descriptorCount; j++){
+			printf("%d\t",proc->desc[j].val);
+		}
+		printf("\n");
+		report.lineCount++;
+	}
+	return;
+}
 static int wakeupProc(){
 	int i, n = 0;
   	for (i = 0; i < blockedLength; i++){
@@ -486,7 +507,7 @@ int main(const int argc, char *const argv[]){
 		execReq(); //execute request from child 
 		
 		wakeupProc();	
-		
+		//REMINDER: check line limit		
 		
 	}	
 	
