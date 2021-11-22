@@ -24,6 +24,9 @@ static struct timeval clockTick;
 
 static int aliveFlag = 1;
 
+static int qBlocked[processSize];
+static int blockedLength = 0; //length of blocked queue
+
 static void ossatexit(){
 	printf("The program will exit\n");
 	exit(EXIT_SUCCESS);
@@ -35,7 +38,8 @@ static void initReport(){
         report.pRun.max = processSize;
 	report.pDone.curr = 0;
         report.pDone.max = maxProcesses;
-
+	
+	report.lineCount = 0;
 	report.immediateAccept = 0;
 	report.waitAccept = 0;
 	report.deadlockRun = 0;
@@ -154,6 +158,300 @@ static int ossAttach(){
 
   	return 0;
 }
+static int emptyProc(struct process *procs){
+	int i;
+	for(i  = 0; i < processSize; i++){
+		if(procs[i].pid == 0)
+			return i;
+	}
+	return -1;
+}
+static int listDeadlocked(const int pdone[processSize]){
+	int i, have_deadlocked = 0;
+  	for (i = 0; i < processSize; i++){
+    		if (!pdone[i]){
+			have_deadlocked = 1;
+			break;
+		}
+	}
+
+	//REMINDER: implement verbose mode
+	if(have_deadlocked > 0){
+		printf("\tProcesses ");
+    		for (i = 0; i < processSize; i++){
+      			if (!pdone[i])
+        			printf("P%d ", ossptr->procs[i].id);
+    		}
+		printf("deadlocked.\n");
+		report.lineCount++;
+	} 
+	
+	return have_deadlocked;
+
+}
+static int detectDeadlock(){
+	int i, j, avail[descriptorCount], pdone[processSize];
+	
+	//array to mark if the process involved in deadlock state
+	for (i = 0; i < processSize; i++){
+    		pdone[i] = 0;
+  	}
+	
+	//avaliable resources matrix
+	for (i = 0; i < descriptorCount; i++){
+    		avail[i] = ossptr->desc[i].val;
+  	}
+	
+	i = 0;
+	while( i != processSize){
+		for(i = 0; i < processSize; i++){
+			struct process *proc = &ossptr->procs[i];
+      			if (proc->pid == 0){
+       	 			pdone[i] = 1;
+      			}
+
+      			if (pdone[i] == 1){
+        			continue;
+      			}
+			int can_complete = 1;
+      			for (j = 0; j < descriptorCount; j++){
+				if (ossptr->desc[j].val < (proc->desc[j].max - proc->desc[j].val)){
+          				can_complete = 0; //can't complete
+          				break;
+        			}
+			}
+			if ((proc->request.val < 0) ||
+          			(proc->request.state != rWAIT) ||
+          			can_complete){
+				pdone[i] = 1;
+
+				for (j = 0; j < descriptorCount; j++){
+          				avail[j] += proc->desc[j].val;
+        			}
+        			break;
+			}
+		}
+	}
+	
+	return listDeadlocked(pdone);
+	
+}
+static int blockProc(const int processID){
+	if(blockedLength < processSize){
+		qBlocked[blockedLength++] = processID;
+		return 0;
+	}
+	return -1;
+}
+static int unblockProc(const int index){
+	int i;
+	if(index >= blockedLength)
+		return -1;
+	const int processID = qBlocked[index];
+	blockedLength--;
+	
+	//shift the queue
+	for (i = index; i < blockedLength; ++i){
+    		qBlocked[i] = qBlocked[i + 1];
+  	}
+  	qBlocked[i] = -1; //clear last queue slot
+
+  	return processID;
+}
+static int onReq(struct process *proc){
+	//REMINDER: add number of request count
+	
+	if(proc->request.val < 0){
+		//releasing resources
+		proc->request.state = rACCEPT; //request is accepted
+		
+		//now returning resources to the system
+		ossptr->desc[proc->request.id].val += -1 * proc->request.val;
+    		proc->desc[proc->request.id].val += proc->request.val;
+
+		 printf("Master has acknowledged Process P%u releasing R%d:%d at time %lu:%06ld\n",
+           proc->id, proc->request.id, -1 * proc->request.val, ossptr->time.tv_sec, ossptr->time.tv_usec);
+		report.lineCount++;
+	}else if(proc->request.id == -1){
+		//user want to return all resources
+		int i;
+		proc->request.state = rACCEPT;
+		printf("Master has acknowledged Process P%u releasing all resources: ", proc->id);
+		
+		for(i = 0; i < descriptorCount; i++){
+			if (proc->desc[i].val > 0){
+        			printf("R%d:%d ", i, proc->desc[i].val);
+				
+				//now returning resources to the system
+				ossptr->desc[i].val += proc->desc[i].val;
+        			proc->desc[i].val = 0;
+			}
+		}
+		
+		printf("\n");
+		report.lineCount++;
+	}else if (ossptr->desc[proc->request.id].val >= proc->request.val){
+		//user want to request resources
+		printf("Master running deadlock detection at time %lu:%06ld\n", ossptr->time.tv_sec, ossptr->time.tv_usec);
+		report.lineCount++;
+		//REMINDER: increment the number of deadlock running
+		
+		//run deadlock algorithm
+		if(detectDeadlock()){
+			printf("Unsafe state after granting request; request not granted\n");
+      			report.lineCount++;
+
+      			proc->request.state = rDENY;
+			//REMINDER: Implement blocked queue to push this process onto blocked queue
+		}else{
+			proc->request.state = rACCEPT;
+			//REMINDER: increment the number of immediate granted request
+			
+			printf("\tSafe state after granting request\n"); 
+    			printf("\tMaster granting P%d request R%d:%d at time %lu:%06ld\n", proc->id, proc->request.id, proc->request.val,
+             		ossptr->time.tv_sec, ossptr->time.tv_usec);
+			report.lineCount += 2;
+
+			//update system
+			ossptr->desc[proc->request.id].val -= proc->request.val;
+		 	proc->desc[proc->request.id].val += proc->request.val;
+			proc->desc[proc->request.id].max -= proc->request.val;
+		}
+	}else{
+		//not enough system resources, user get blocked
+		if(blockProc(proc->id) == 0){
+			proc->request.state = rBLOCK;
+      			printf("\tP%d added to wait queue, waiting on R%d=%d\n", proc->id, proc->request.id, proc->request.val);
+		}else{
+			proc->request.state = rDENY;
+      			printf("\tP%d wans't added to wait queue, queue is full\n", proc->id);
+		}
+		report.lineCount++;
+	}
+
+	return 0;
+
+}
+static int execReq(){
+	int i;
+	sigset_t mask, oldmask;
+	struct timeval tv;
+
+	//block child signal
+	sigemptyset(&mask);
+  	sigaddset(&mask, SIGCHLD);
+  	sigprocmask(SIG_BLOCK, &mask, &oldmask);
+
+	//lock the shared region
+	ossSemWait();
+	for(i = 0; i < processSize; i++){
+		struct process *proc = &ossptr->procs[i];
+		if (proc->request.state == rWAIT)
+      			onReq(proc); //if there is a request
+
+	}
+	ossSemPost();
+
+	//re-allow the child signal
+	sigprocmask(SIG_SETMASK, &oldmask, NULL);
+
+	//update timer with dispatch time
+	tv.tv_sec = 0;
+  	tv.tv_usec = rand() % 100;
+  	if (ossTimeUpdate(&tv) < 0)
+    		return -1;
+
+	//REMINDER: Might need to print out the dispatch time
+	return 0;
+
+}
+static int idToIndex(const int id){
+  	int i;
+  	for (i = 0; i < processSize; i++){
+    		if (ossptr->procs[i].id == id)
+      			return i;
+    	}
+  	return -1;
+}
+static int unblock(const int b, const enum requestState newSt){
+	const int id = unblockProc(b);
+	const int idx = idToIndex(id);
+	struct process *proc = &ossptr->procs[idx];
+
+	ossSemWait();
+	proc->processState = pREADY;
+  	proc->request.state = newSt;
+	
+	if (proc->request.state == rDENY){
+    		printf("Master Denied process with PID %d waiting on R%d=%d at time %lu:%06ld\n",
+           		proc->id, proc->request.id, proc->request.val, ossptr->time.tv_sec, ossptr->time.tv_usec);
+  		report.lineCount++;
+	}else{
+		//REMINDER: increment the number of accepted request after waiting
+		ossptr->desc[proc->request.id].val -= proc->request.val;
+    		proc->desc[proc->request.id].val += proc->request.val;
+    		proc->desc[proc->request.id].max -= proc->request.val;
+		printf("Master Unblocked process with PID %d waiting on R%d=%d at time %lu:%06ld\n",
+           		proc->id, proc->request.id, proc->request.val, ossptr->time.tv_sec, ossptr->time.tv_usec);
+	}
+	ossSemPost();
+	return 0;
+}
+static int wakeupProc(){
+	int i, n = 0;
+  	for (i = 0; i < blockedLength; i++){
+		const int id = qBlocked[i];
+		const int idx = idToIndex(id);
+		struct process *proc = &ossptr->procs[idx];
+
+		if(ossptr->desc[proc->request.id].val >= proc->request.val){
+			unblock(i, rACCEPT);
+			n++;
+		}
+	}
+
+	if(n == 0){
+		if ((blockedLength > 0) && (blockedLength == report.pRun.curr)){
+			unblock(0,rDENY); //unblock but deny to avoid deadlock
+		}else{
+			return 0; //nothing to unblock	
+		}
+	}
+
+	return 1;
+}
+static int startProcess(){
+	char argID[5];
+	const int index = emptyProc(ossptr->procs);
+	if(index == -1)
+		return -1;
+	struct process *proc = &ossptr->procs[index];
+	snprintf(argID, 5, "%d", index);
+
+	const pid_t pid = fork();
+	if(pid == -1){
+		fprintf(stderr,"%s: ",prog);
+                perror("fork");
+                return -1;
+	}	
+	
+	if(pid == 0){
+		execl("./user_proc","./user_proc",argID,NULL);
+		fprintf(stderr,"%s: ",prog);
+                perror("execl");
+                return -1;
+
+	}else{
+		proc->pid = pid;
+		proc->id = report.pStart.curr++;
+		proc->processState = pREADY;
+
+		report.pRun.curr++;
+		printf("Master generating process with PID %u at time %lu:%06ld\n", proc->id, ossptr->time.tv_sec, ossptr->time.tv_usec);
+		report.lineCount++;
+	}
+	return 0;
+}
 int main(const int argc, char *const argv[]){
 	prog = argv[0];
 	struct timeval next_start = {.tv_sec = 1, .tv_usec = 500000};
@@ -178,12 +476,16 @@ int main(const int argc, char *const argv[]){
 		if(ossTimeUpdate(&clockTick) < 0)
       			break;
 		if((timercmp(&ossptr->time, &next_start, >=) != 0) && (report.pStart.curr < report.pStart.max)){
-			//ossProcess();
+			startProcess();
 
+			//update future timer to fork another process
 			next_start.tv_sec = ossptr->time.tv_sec;
         		next_start.tv_usec = ossptr->time.tv_usec + ((rand() % 499000) + 1000);
-
 		}
+		
+		execReq(); //execute request from child 
+		
+		wakeupProc();	
 		
 		
 	}	

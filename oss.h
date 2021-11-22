@@ -47,6 +47,7 @@ struct oss{
 };
 struct ossReport{
 	struct pDescriptor pStart, pRun, pDone;
+	unsigned int lineCount;
 	unsigned int immediateAccept;
 	unsigned int waitAccept;
 	unsigned int deadlockRun;
