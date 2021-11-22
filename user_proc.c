@@ -178,7 +178,7 @@ int main(const int argc, char *const argv[]){
 	
 	struct timeval tstep, tcheck;
 	tstep.tv_sec = 0;
-	tstep.tv_usec = rand() % (termCheckPeriod + 1);
+	tstep.tv_usec = rand() % termCheckPeriod;
 
 			
 	ossSemWait();
@@ -194,7 +194,7 @@ int main(const int argc, char *const argv[]){
 		if(timercmp(&ossptr->time, &tcheck, >)){
 			//if it is time to terminate
 			stop = ossptr->terminateFlag;
-			tstep.tv_usec = rand() % (termCheckPeriod + 1);
+			tstep.tv_usec = rand() % termCheckPeriod;
 			timeradd(&tstep, &ossptr->time, &tcheck);
 		}else{
 			stop = userProcess();

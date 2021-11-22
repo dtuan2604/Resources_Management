@@ -17,12 +17,16 @@ struct descriptor{
 	int max; //maximum instances of the resources
 	int val; //number of instances left
 };
-
+struct pDescriptor{
+	int curr;
+	int max;
+};
 struct descriptorRequest{
 	int id;
 	int val;
 	enum requestState state;
 };
+
 struct process{
 	int pid, id; //processID and OSS ID
 	
@@ -41,3 +45,11 @@ struct oss{
 	int terminateFlag;
 
 };
+struct ossReport{
+	struct pDescriptor pStart, pRun, pDone;
+	unsigned int immediateAccept;
+	unsigned int waitAccept;
+	unsigned int deadlockRun;
+	unsigned int successTerm;
+};
+

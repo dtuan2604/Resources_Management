@@ -13,4 +13,4 @@ oss: $(OBJ)
 user_proc: $(OBJ)
 	$(CC) $(CFLAGS) -lm -o $@ $@.o
 clean:
-	rm -rf oss user_proc *.log *.o 
+	rm -rf oss user_proc *.txt *.o 
