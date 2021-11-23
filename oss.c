@@ -27,10 +27,26 @@ static int aliveFlag = 1;
 static int qBlocked[processSize];
 static int blockedLength = 0; //length of blocked queue
 
-static void ossatexit(){
-	printf("The program will exit\n");
-	exit(EXIT_SUCCESS);
-}
+static void deallocateSHM(){
+	if(ossptr != NULL){
+		if(shmdt(ossptr) == -1){
+			fprintf(stderr,"%s: failed to detach shared memory. ",prog);
+                	perror("Error");
+		}
+	}
+	if(shmID != -1){
+		if(shmctl(shmID, IPC_RMID, NULL) == -1){
+			fprintf(stderr,"%s: failed to delete shared memory. ",prog);
+                        perror("Error");
+		}
+	}
+	if(semID != -1){
+		if(semctl(semID, 0, IPC_RMID) == -1){
+			fprintf(stderr,"%s: failed to delete semaphore.",prog);
+                        perror("Error");
+		}	
+	}
+}	
 static void initReport(){
 	report.pStart.curr = 0;
 	report.pStart.max = maxProcesses;
@@ -45,11 +61,6 @@ static void initReport(){
 	report.deadlockRun = 0;
 	report.successTerm = 0;
 	//wait for prof confimation for the output
-
-}
-static void sigHandler(){
-	printf("Signal is called\n");
-	exit(1);
 
 }
 static void initDesc(struct descriptor sys[descriptorCount]){
@@ -158,6 +169,75 @@ static int ossAttach(){
 
   	return 0;
 }
+static int pidToIndex(const int pid){
+	int i;
+  	for (i = 0; i < processSize; i++){
+    		if (ossptr->procs[i].pid == pid)
+      			return i;
+  	}
+  	return -1;
+
+}
+static void waitChild(){
+        pid_t pid;
+        int status, idx;
+        while ((pid = waitpid(-1, &status, WNOHANG | WUNTRACED | WCONTINUED)) > 0){
+                idx = pidToIndex(pid);
+                if(idx == -1)
+                        continue;
+                printf("Master Child %i processDone code %d at time %lu:%i\n",
+                        ossptr->procs[idx].id, WEXITSTATUS(status), ossptr->time.tv_sec, ossptr->time.tv_usec);
+                report.lineCount++;
+
+                bzero(&ossptr->procs[idx], sizeof(struct process));
+                report.pRun.curr--;
+                if(++report.pDone.curr >= report.pStart.max){
+                        printf("Master encounters maximum processes. Stoping OSS now\n");
+                        aliveFlag = 0;
+                }
+        }
+
+}
+static void sigHandler(const int sig){
+        switch(sig){
+                case SIGTERM:
+                case SIGINT:
+                        printf("Master received TERM/INT signal at time %lu:%06ld\n", ossptr->time.tv_sec, ossptr->time.tv_usec);
+                        aliveFlag = 0;
+                        break;
+                case SIGALRM:
+                        printf("Master received ALRM signal at time %lu:%06ld\n", ossptr->time.tv_sec, ossptr->time.tv_usec);
+                        aliveFlag = 0;
+                        break;
+                case SIGCHLD:
+                        waitChild();
+                        break;
+                default:
+                        fprintf(stderr, "Error: Unknown signal received\n");
+                        break;
+        }
+
+}
+static void ossExit(){
+        int i;
+        if(ossptr){
+                ossptr->time.tv_sec++;
+
+                ossSemWait();
+                for(i = 0; i < processSize; i++){
+                        if ((ossptr->procs[i].request.state == rWAIT) ||
+                                (ossptr->procs[i].request.state == rBLOCK))
+                                ossptr->procs[i].request.state = rDENY;
+                }
+                ossSemPost();
+                while (report.pRun.curr > 0)
+                        waitChild();
+        }
+        printf("Master exit at time %lu:%06ld\n", ossptr->time.tv_sec, ossptr->time.tv_usec);
+        deallocateSHM();
+        exit(EXIT_SUCCESS);
+}
+
 static int emptyProc(struct process *procs){
 	int i;
 	for(i  = 0; i < processSize; i++){
@@ -385,7 +465,6 @@ static int unblock(const int b, const enum requestState newSt){
 	if (proc->request.state == rDENY){
     		printf("Master Denied process with PID %d waiting on R%d=%d at time %lu:%06ld\n",
            		proc->id, proc->request.id, proc->request.val, ossptr->time.tv_sec, ossptr->time.tv_usec);
-  		report.lineCount++;
 	}else{
 		//REMINDER: increment the number of accepted request after waiting
 		ossptr->desc[proc->request.id].val -= proc->request.val;
@@ -394,6 +473,7 @@ static int unblock(const int b, const enum requestState newSt){
 		printf("Master Unblocked process with PID %d waiting on R%d=%d at time %lu:%06ld\n",
            		proc->id, proc->request.id, proc->request.val, ossptr->time.tv_sec, ossptr->time.tv_usec);
 	}
+	report.lineCount++;
 	ossSemPost();
 	return 0;
 }
@@ -416,6 +496,7 @@ static void listAllocatedRes(){
 		printf("\n");
 		report.lineCount++;
 	}
+	fflush(stdout);
 	return;
 }
 static int wakeupProc(){
@@ -473,17 +554,27 @@ static int startProcess(){
 	}
 	return 0;
 }
+static void printReport(){
+	listAllocatedRes();
+	//REMINDER: implement log file	
+
+}
 int main(const int argc, char *const argv[]){
 	prog = argv[0];
 	struct timeval next_start = {.tv_sec = 1, .tv_usec = 500000};
 
-	atexit(ossatexit);
+	atexit(ossExit);
 	stdout = freopen(logfile,"w",stdout);
 
 	initReport();
 	signal(SIGALRM, sigHandler);	
 	if(ossAttach() < 0)
-		ossatexit();	
+		ossExit();	
+
+	signal(SIGINT, sigHandler);
+  	signal(SIGTERM, sigHandler);
+  	signal(SIGCHLD, sigHandler);
+  	signal(SIGALRM, sigHandler);
 
 	clockTick.tv_sec = 0;
   	clockTick.tv_usec = 100;
@@ -507,16 +598,13 @@ int main(const int argc, char *const argv[]){
 		execReq(); //execute request from child 
 		
 		wakeupProc();	
-		//REMINDER: check line limit		
-		
+		//REMINDER: check line limit
+		if(report.lineCount >= maxLine){
+			raise(SIGINT);
+		}			
 	}	
-	
 
-
-
-
-
-
+	printReport();
 	return EXIT_SUCCESS;
 
 }
