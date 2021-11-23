@@ -78,10 +78,10 @@ static void initDesc(struct descriptor sys[descriptorCount]){
 	}
 	
 	for(i = 0; i < descriptorCount; i++){
-		if(sys[i].shareable == 0)
+		if(sys[i].shareable == 1) //if it is shared resources, then populate it with instances
 			sys[i].max = 1 + (rand() % descriptorMaxins);
 		else
-			sys[i].max = 1;
+			sys[i].max = 1; //it is not shared resources, then it should have only one resource at a time
 		sys[i].val = sys[i].max;
 	}
 }
@@ -534,7 +534,7 @@ static int startProcess(){
 	if(pid == -1){
 		fprintf(stderr,"%s: ",prog);
                 perror("fork");
-                return -1;
+                exit(EXIT_FAILURE);
 	}	
 	
 	if(pid == 0){
@@ -549,7 +549,7 @@ static int startProcess(){
 		proc->processState = pREADY;
 
 		report.pRun.curr++;
-		printf("Master generating process with PID %u at time %lu:%06ld\n", proc->id, ossptr->time.tv_sec, ossptr->time.tv_usec);
+		printf("Master generating process with ID %u at time %lu:%06ld\n", proc->id, ossptr->time.tv_sec, ossptr->time.tv_usec);
 		report.lineCount++;
 	}
 	return 0;
