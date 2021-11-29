@@ -1,0 +1,52 @@
+#Project 3: Resource Management
+
+
+Name:		Duong Tuan Hoang
+Section: 	CMPSCI 4760 - Operating System
+VCS: 		git
+Date: 		11/29/2021
+
+##Files
+	oss.c - the main program
+	user_proc.c - the application program
+	oss.h - header file containing data structures used in this project
+	config.h - header file containing constants
+	makefile
+
+## How to run the program
+	> make
+	> ./oss
+
+## Remove all executables and object files
+	make clean
+
+## Central Data Structure
+	Semaphore: used to enable mutual exclusion
+	Timeval: used to stimulate a clock
+	Shared Memory: contains the information about the clock and process control block, descriptor of the resources
+
+## Description
+	oss.c:
+		> oss.c will stimulate a resource management module for a operating system using deadlock avoidance strategy. 
+		> Semaphore is enabled to prevent the programs from race condition. 
+		> Initially, program will initialize the resources. By default, there are 20 resources created each time program
+		running, and 20% of them will be sharable resources. You can adjust these number in the config.h files. The sharable
+		resources can have from 1 to 10 instances. The non-sharable resources can only have one instance. 
+		> oss.c will keep executing a loop if it is still alive. In each iteration, oss.c check if it is time to fork
+		a new process. Then oss.c check the shared memory to see if there is any requests from the child. If they are asking
+		for resources. oss.c makes a decision based on the received requests whether the resources should be allocated to 
+		processes or not. It does so by running the deadlock avoidance algorithm. If there is no deadlock, the request is 
+		granted and the system data is updated. Otherwise, the process is put in a waiting queue waiting for that resource. 
+		If they are releasing their resources, oss.c also updates it data as well and might give it to a waitting process.
+		> oss.c is terminated if they have exceed the maximum number of process defined in the config.h file. It is also 
+		terminated upon interrupt signal. They will try to deny every request from child and shut them down. Finally,
+		it will print a report, which contains the number of requests children have made, the number of immediate accepted 
+		asking resources requests, the number of accepted asing resources requests after waiting for a bit, the number of 
+		denied requests because of the deadlock, and the average waiting time of a process on their requests.
+	user_proc.c:
+		> user_proc.c is used to simulate the child process. 
+		> It will keep executing a loop to negotiate with oss.c to get access to a resource. 
+		> It will send requests via the process control block which is already initialized by oss.c. Semaphore is also
+		enabled to protect critical section.
+		> Upon receving terminate signal from oss.c, user_proc.c will try to return every resources it is currently holding
+		and terminate. 

@@ -429,15 +429,6 @@ static int ossAttach(){
 
   return 0;
 }
-void interruptChild(){
-  int i;
-  for(i =0; i < processSize; i++){
-    pid_t pid = ossptr->procs[i].pid;
-    if(pid > 0){
-      kill(pid, SIGKILL);
-    }
-  }
-}
 static void sigHandler(const int sig){
 
   switch (sig){
@@ -445,13 +436,11 @@ static void sigHandler(const int sig){
   case SIGINT:
     printf("Master TERM/INT at time %lu:%06ld\n", ossptr->time.tv_sec, ossptr->time.tv_usec);
     aliveFlag = 0; //stop master loop
-    // interruptChild();
     break;
 
   case SIGALRM:
     printf("Master ALRM at time %lu:%06ld\n", ossptr->time.tv_sec, ossptr->time.tv_usec);
     aliveFlag = 0;
-    // interruptChild();
     break;
 
   case SIGCHLD:

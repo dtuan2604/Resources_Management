@@ -5,7 +5,7 @@
 #define processSize 18 //Active processes
 #define processMaximum 40 
 #define sleeptime 250
-#define optionVerbose 0
+#define optionVerbose 1
 #define maxRuntime 5 //maximum allowed runtime
 
 #define termCheckPeriod 250 
